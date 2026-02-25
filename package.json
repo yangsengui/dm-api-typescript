@@ -1,0 +1,48 @@
+{
+  "name": "distromate-dm-api-ts",
+  "version": "1.1.0",
+  "description": "DistroMate DM API SDK for TypeScript",
+  "type": "module",
+  "main": "./dist/dm_api.js",
+  "types": "./dist/dm_api.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/dm_api.d.ts",
+      "import": "./dist/dm_api.js"
+    }
+  },
+  "files": [
+    "dist",
+    "*.ts",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "distromate",
+    "license",
+    "verification",
+    "sdk",
+    "typescript"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yangsengui/dm-api-typescript.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "koffi": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "typescript": "^5.6.3"
+  }
+}
