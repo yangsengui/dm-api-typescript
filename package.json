@@ -1,5 +1,5 @@
 {
-  "name": "distromate-dm-api-ts",
+  "name": "@distromate/dm-api",
   "version": "1.2.0",
   "description": "DistroMate DM API SDK for TypeScript",
   "type": "module",

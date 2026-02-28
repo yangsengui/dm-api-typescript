@@ -5,13 +5,13 @@ TypeScript SDK for DistroMate `dm_api` native library.
 ## Install
 
 ```bash
-npm install distromate-dm-api-ts
+npm install @distromate/dm-api
 ```
 
 ## Quick Start (License)
 
 ```typescript
-import { DmApi } from 'distromate-dm-api-ts';
+import { DmApi } from '@distromate/dm-api';
 
 const api = new DmApi();
 
