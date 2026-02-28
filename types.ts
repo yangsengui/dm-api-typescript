@@ -2,13 +2,16 @@ import type koffi from 'koffi';
 
 export type JsonMap = Record<string, unknown>;
 
-export interface DllResponse<T> {
-  data?: T;
+export type LicenseCallback = () => void;
+
+export interface UpdateEnvelope<TData extends JsonMap = JsonMap> {
+  id?: string;
+  type?: string;
+  data?: TData;
 }
 
 export interface DmApiOptions {
   dllPath?: string | null;
-  pipeTimeoutMs?: number;
 }
 
 export interface ShouldSkipCheckOptions {
@@ -22,14 +25,15 @@ export interface ActivationMode {
 }
 
 export interface DmApiFunctions {
-  connect: koffi.KoffiFunction;
-  close: koffi.KoffiFunction;
-  getVersion: koffi.KoffiFunction;
+  freeString: koffi.KoffiFunction;
   getLastError: koffi.KoffiFunction;
-  restartAppIfNecessary: koffi.KoffiFunction;
+
   checkForUpdates: koffi.KoffiFunction;
   downloadUpdate: koffi.KoffiFunction;
+  cancelUpdateDownload: koffi.KoffiFunction;
   getUpdateState: koffi.KoffiFunction;
+  getPostUpdateInfo: koffi.KoffiFunction;
+  ackPostUpdateInfo: koffi.KoffiFunction;
   waitForUpdateStateChange: koffi.KoffiFunction;
   quitAndInstall: koffi.KoffiFunction;
   jsonToCanonical: koffi.KoffiFunction;
@@ -41,10 +45,8 @@ export interface DmApiFunctions {
   setCustomDeviceFingerprint: koffi.KoffiFunction;
 
   setLicenseKey: koffi.KoffiFunction;
-  setActivationMetadata: koffi.KoffiFunction;
+  setLicenseCallback: koffi.KoffiFunction;
   activateLicense: koffi.KoffiFunction;
-  activateLicenseOffline: koffi.KoffiFunction;
-  generateOfflineDeactivationRequest: koffi.KoffiFunction;
   getLastActivationError: koffi.KoffiFunction;
 
   isLicenseGenuine: koffi.KoffiFunction;

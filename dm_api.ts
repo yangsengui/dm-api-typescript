@@ -2,50 +2,57 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import koffi from 'koffi';
+
 import {
+  ACTIVATION_ERROR_NAMES,
   DEFAULT_BUFFER_SIZE,
-  DEFAULT_PIPE_TIMEOUT_MS,
   DEV_LICENSE_ERROR,
+  ENV_DM_APP_ID,
+  ENV_DM_LAUNCHER_ENDPOINT,
+  ENV_DM_LAUNCHER_TOKEN,
+  ENV_DM_PUBLIC_KEY,
 } from './constants.js';
-import { ensureLibLoaded } from './ffi.js';
+import { ensureLibLoaded, LICENSE_CALLBACK_POINTER_TYPE } from './ffi.js';
 import type {
   ActivationMode,
-  DllResponse,
-  DmApiOptions,
   DmApiFunctions,
+  DmApiOptions,
   JsonMap,
+  LicenseCallback,
   ShouldSkipCheckOptions,
+  UpdateEnvelope,
 } from './types.js';
 import { allocBuffer, parseJson, readCString } from './utils.js';
 
 export type {
   ActivationMode,
-  DllResponse,
-  DmApiOptions,
   DmApiFunctions,
+  DmApiOptions,
   JsonMap,
+  LicenseCallback,
   ShouldSkipCheckOptions,
+  UpdateEnvelope,
 } from './types.js';
+
+type UnknownFunction = (...args: unknown[]) => unknown;
+type RegisteredCallbackHandle = ReturnType<typeof koffi.register>;
 
 export class DmApi {
   private readonly _funcs: DmApiFunctions;
-  private readonly _pipeTimeoutMs: number;
+  private _licenseCallbackHandle: RegisteredCallbackHandle | null = null;
 
   constructor(options: DmApiOptions = {}) {
     this._funcs = ensureLibLoaded(options.dllPath ?? null);
-    this._pipeTimeoutMs = Math.max(
-      0,
-      Math.floor(Number(options.pipeTimeoutMs ?? DEFAULT_PIPE_TIMEOUT_MS) || 0)
-    );
   }
 
   static shouldSkipCheck(options: ShouldSkipCheckOptions = {}): boolean {
-    if (process.env.DM_PIPE && process.env.DM_API_PATH) {
+    if (process.env[ENV_DM_LAUNCHER_ENDPOINT] && process.env[ENV_DM_LAUNCHER_TOKEN]) {
       return false;
     }
 
-    const resolvedAppId = options.appId || process.env.DM_APP_ID;
-    const resolvedPublicKey = options.publicKey || process.env.DM_PUBLIC_KEY;
+    const resolvedAppId = options.appId || process.env[ENV_DM_APP_ID];
+    const resolvedPublicKey = options.publicKey || process.env[ENV_DM_PUBLIC_KEY];
     if (!resolvedAppId || !resolvedPublicKey) {
       throw new Error(
         'App identity is required for dev-license checks. Provide appId/publicKey or set DM_APP_ID and DM_PUBLIC_KEY.'
@@ -74,40 +81,18 @@ export class DmApi {
     return true;
   }
 
-  getVersion(): string {
-    return (this._funcs.getVersion() as string) || '';
-  }
-
   getLastError(): string | null {
     return (this._funcs.getLastError() as string | null) || null;
   }
 
-  restartAppIfNecessary(): boolean {
-    return (this._funcs.restartAppIfNecessary() as number) !== 0;
-  }
-
-  private _resolvePipe(): string | null {
-    return process.env.DM_PIPE || null;
-  }
-
-  private _withPipe<T>(callback: () => T | null): T | null {
-    const pipe = this._resolvePipe();
-    if (!pipe) {
+  getActivationErrorName(code: number | null | undefined): string | null {
+    if (code == null) {
       return null;
     }
-
-    if ((this._funcs.connect(pipe, this._pipeTimeoutMs) as number) !== 0) {
-      return null;
-    }
-
-    try {
-      return callback();
-    } finally {
-      this._funcs.close();
-    }
+    return ACTIVATION_ERROR_NAMES[code] || `UNKNOWN(${code})`;
   }
 
-  private _callStatusBool(func: (...args: unknown[]) => unknown, ...args: unknown[]): boolean {
+  private _callStatusBool(func: UnknownFunction, ...args: unknown[]): boolean {
     return (func(...args) as number) === 0;
   }
 
@@ -119,76 +104,74 @@ export class DmApi {
     return out.readUInt32LE(0);
   }
 
-  private _callStringOut(func: (buffer: Buffer, size: number) => unknown, bufferSize: number = DEFAULT_BUFFER_SIZE): string | null {
-    const buffer = allocBuffer(bufferSize);
+  private _callStringOut(
+    func: (buffer: Buffer, size: number) => unknown,
+    bufferSize: number = DEFAULT_BUFFER_SIZE
+  ): string | null {
+    const buffer = allocBuffer(bufferSize, DEFAULT_BUFFER_SIZE);
     if ((func(buffer, buffer.length) as number) !== 0) {
       return null;
     }
     return readCString(buffer);
   }
 
-  setProductData(productData: string): boolean {
-    return this._callStatusBool(this._funcs.setProductData as (...args: unknown[]) => unknown, productData);
+  private _callJsonEnvelope(func: UnknownFunction, ...args: unknown[]): UpdateEnvelope | null {
+    const raw = (func(...args) as string | null) || null;
+    return parseJson<UpdateEnvelope>(raw);
   }
 
-  setProductId(productId: string, flags: number = 0): boolean {
-    const normalizedFlags = Math.max(0, Math.floor(Number(flags) || 0));
-    return this._callStatusBool(
-      this._funcs.setProductId as (...args: unknown[]) => unknown,
-      productId,
-      normalizedFlags
-    );
+  private _encodeOptions(options?: JsonMap | null): string | null {
+    if (options == null) {
+      return null;
+    }
+    return JSON.stringify(options);
+  }
+
+  setProductData(productData: string): boolean {
+    return this._callStatusBool(this._funcs.setProductData as UnknownFunction, productData);
+  }
+
+  setProductId(productId: string): boolean {
+    return this._callStatusBool(this._funcs.setProductId as UnknownFunction, productId);
   }
 
   setDataDirectory(directoryPath: string): boolean {
-    return this._callStatusBool(
-      this._funcs.setDataDirectory as (...args: unknown[]) => unknown,
-      directoryPath
-    );
+    return this._callStatusBool(this._funcs.setDataDirectory as UnknownFunction, directoryPath);
   }
 
   setDebugMode(enable: boolean): boolean {
-    return this._callStatusBool(
-      this._funcs.setDebugMode as (...args: unknown[]) => unknown,
-      enable ? 1 : 0
-    );
+    return this._callStatusBool(this._funcs.setDebugMode as UnknownFunction, enable ? 1 : 0);
   }
 
   setCustomDeviceFingerprint(fingerprint: string): boolean {
-    return this._callStatusBool(
-      this._funcs.setCustomDeviceFingerprint as (...args: unknown[]) => unknown,
-      fingerprint
-    );
+    return this._callStatusBool(this._funcs.setCustomDeviceFingerprint as UnknownFunction, fingerprint);
   }
 
   setLicenseKey(licenseKey: string): boolean {
-    return this._callStatusBool(this._funcs.setLicenseKey as (...args: unknown[]) => unknown, licenseKey);
+    return this._callStatusBool(this._funcs.setLicenseKey as UnknownFunction, licenseKey);
   }
 
-  setActivationMetadata(key: string, value: string): boolean {
-    return this._callStatusBool(
-      this._funcs.setActivationMetadata as (...args: unknown[]) => unknown,
-      key,
-      value
-    );
+  setLicenseCallback(callback: LicenseCallback): boolean {
+    if (typeof callback !== 'function') {
+      throw new TypeError('callback must be a function');
+    }
+
+    const handle = koffi.register(callback, LICENSE_CALLBACK_POINTER_TYPE);
+    const ok = this._callStatusBool(this._funcs.setLicenseCallback as UnknownFunction, handle);
+    if (!ok) {
+      koffi.unregister(handle);
+      return false;
+    }
+
+    if (this._licenseCallbackHandle) {
+      koffi.unregister(this._licenseCallbackHandle);
+    }
+    this._licenseCallbackHandle = handle;
+    return true;
   }
 
   activateLicense(): boolean {
-    return this._callStatusBool(this._funcs.activateLicense as (...args: unknown[]) => unknown);
-  }
-
-  activateLicenseOffline(filePath: string): boolean {
-    return this._callStatusBool(
-      this._funcs.activateLicenseOffline as (...args: unknown[]) => unknown,
-      filePath
-    );
-  }
-
-  generateOfflineDeactivationRequest(filePath: string): boolean {
-    return this._callStatusBool(
-      this._funcs.generateOfflineDeactivationRequest as (...args: unknown[]) => unknown,
-      filePath
-    );
+    return this._callStatusBool(this._funcs.activateLicense as UnknownFunction);
   }
 
   getLastActivationError(): number | null {
@@ -196,11 +179,11 @@ export class DmApi {
   }
 
   isLicenseGenuine(): boolean {
-    return this._callStatusBool(this._funcs.isLicenseGenuine as (...args: unknown[]) => unknown);
+    return this._callStatusBool(this._funcs.isLicenseGenuine as UnknownFunction);
   }
 
   isLicenseValid(): boolean {
-    return this._callStatusBool(this._funcs.isLicenseValid as (...args: unknown[]) => unknown);
+    return this._callStatusBool(this._funcs.isLicenseValid as UnknownFunction);
   }
 
   getServerSyncGracePeriodExpiryDate(): number | null {
@@ -210,7 +193,7 @@ export class DmApi {
   getActivationMode(bufferSize: number = 64): ActivationMode | null {
     const initial = allocBuffer(bufferSize, 64);
     const current = allocBuffer(bufferSize, 64);
-    const result = (this._funcs.getActivationMode as (...args: unknown[]) => unknown)(
+    const result = (this._funcs.getActivationMode as UnknownFunction)(
       initial,
       initial.length,
       current,
@@ -254,72 +237,57 @@ export class DmApi {
     return this._callStringOut(this._funcs.getActivationId as (buffer: Buffer, size: number) => unknown, bufferSize);
   }
 
-  getLibraryVersion(bufferSize: number = 32): string | null {
-    return this._callStringOut(this._funcs.getLibraryVersion as (buffer: Buffer, size: number) => unknown, bufferSize);
-  }
-
   reset(): boolean {
-    return this._callStatusBool(this._funcs.reset as (...args: unknown[]) => unknown);
+    return this._callStatusBool(this._funcs.reset as UnknownFunction);
   }
 
-  checkForUpdates(options: JsonMap = {}): JsonMap | null {
-    const req = JSON.stringify(options || {});
-    return this._withPipe<JsonMap>(() => {
-      const resp = parseJson<DllResponse<JsonMap>>(
-        (this._funcs.checkForUpdates as (...args: unknown[]) => unknown)(req) as string | null
-      );
-      return resp?.data ?? null;
-    });
+  checkForUpdates(options: JsonMap | null = null): UpdateEnvelope | null {
+    return this._callJsonEnvelope(this._funcs.checkForUpdates as UnknownFunction, this._encodeOptions(options));
   }
 
-  downloadUpdate(options: JsonMap = {}): JsonMap | null {
-    const req = JSON.stringify(options || {});
-    return this._withPipe<JsonMap>(() => {
-      const resp = parseJson<DllResponse<JsonMap>>(
-        (this._funcs.downloadUpdate as (...args: unknown[]) => unknown)(req) as string | null
-      );
-      return resp?.data ?? null;
-    });
+  downloadUpdate(options: JsonMap | null = null): UpdateEnvelope | null {
+    return this._callJsonEnvelope(this._funcs.downloadUpdate as UnknownFunction, this._encodeOptions(options));
   }
 
-  getUpdateState(): JsonMap | null {
-    return this._withPipe<JsonMap>(() => {
-      const resp = parseJson<DllResponse<JsonMap>>(
-        (this._funcs.getUpdateState as (...args: unknown[]) => unknown)() as string | null
-      );
-      return resp?.data ?? null;
-    });
+  cancelUpdateDownload(options: JsonMap | null = null): UpdateEnvelope | null {
+    return this._callJsonEnvelope(
+      this._funcs.cancelUpdateDownload as UnknownFunction,
+      this._encodeOptions(options)
+    );
   }
 
-  waitForUpdateStateChange(lastSequence: number, timeoutMs: number = 30000): JsonMap | null {
+  getUpdateState(): UpdateEnvelope | null {
+    return this._callJsonEnvelope(this._funcs.getUpdateState as UnknownFunction);
+  }
+
+  getPostUpdateInfo(): UpdateEnvelope | null {
+    return this._callJsonEnvelope(this._funcs.getPostUpdateInfo as UnknownFunction);
+  }
+
+  ackPostUpdateInfo(options: JsonMap | null = null): UpdateEnvelope | null {
+    return this._callJsonEnvelope(this._funcs.ackPostUpdateInfo as UnknownFunction, this._encodeOptions(options));
+  }
+
+  waitForUpdateStateChange(lastSequence: number, timeoutMs: number = 30000): UpdateEnvelope | null {
     const sequence = Math.max(0, Math.floor(Number(lastSequence) || 0));
     const timeout = Math.max(0, Math.floor(Number(timeoutMs) || 0));
-    return this._withPipe<JsonMap>(() => {
-      const resp = parseJson<DllResponse<JsonMap>>(
-        (this._funcs.waitForUpdateStateChange as (...args: unknown[]) => unknown)(
-          sequence,
-          timeout
-        ) as string | null
-      );
-      return resp?.data ?? null;
-    });
+    return this._callJsonEnvelope(this._funcs.waitForUpdateStateChange as UnknownFunction, sequence, timeout);
   }
 
-  quitAndInstall(options: JsonMap = {}): boolean {
-    const req = JSON.stringify(options || {});
-    const result = this._withPipe<boolean>(
-      () =>
-        ((this._funcs.quitAndInstall as (...args: unknown[]) => unknown)(req) as number) === 1
-    );
-    return result === true;
+  quitAndInstall(options: JsonMap | null = null): number {
+    return Number((this._funcs.quitAndInstall as UnknownFunction)(this._encodeOptions(options)));
+  }
+
+  getLibraryVersion(): string {
+    return (this._funcs.getLibraryVersion() as string) || '';
   }
 
   jsonToCanonical(jsonStr: string): string | null {
-    return ((this._funcs.jsonToCanonical as (...args: unknown[]) => unknown)(jsonStr) as string) || null;
+    return ((this._funcs.jsonToCanonical as UnknownFunction)(jsonStr) as string | null) || null;
   }
 
   static jsonToCanonical(jsonStr: string, options: Pick<DmApiOptions, 'dllPath'> = {}): string | null {
     const loaded = ensureLibLoaded(options.dllPath ?? null);
-    return ((loaded.jsonToCanonical as (...args: unknown[]) => unknown)(jsonStr) as string) || null;
+    return ((loaded.jsonToCanonical as UnknownFunction)(jsonStr) as string | null) || null;
   }
 }
